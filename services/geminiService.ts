@@ -27,15 +27,23 @@ const presentationSchema = {
       },
       speakerNotes: {
         type: Type.STRING,
-        description: "Detailed speaker notes for the presenter. This will be converted to audio. Should be a full paragraph, elaborating on the bullet points.",
+        description: "Detailed speaker notes for the presenter in English. This will be shown on the presentation notes. Should be a full paragraph, elaborating on the bullet points.",
+      },
+      translatedSpeakerNotes: {
+          type: Type.STRING,
+          description: "The speaker notes from above, translated into the target voiceover language. If the target language is English, this should be the same as speakerNotes."
+      },
+      imagePrompt: {
+        type: Type.STRING,
+        description: "A detailed, visually descriptive prompt for an AI image generator to create a relevant, high-quality image for this slide. The prompt should describe a scene that visually represents the concept on the slide, like a metaphor or a diagram (e.g., 'A futuristic data pipeline showing glowing data streams flowing between servers'). This should create a background image for the slide content.",
       },
     },
-    required: ["title", "content", "speakerNotes"],
+    required: ["title", "content", "speakerNotes", "translatedSpeakerNotes", "imagePrompt"],
   },
 };
 
-export const generatePresentationContent = async (topic: string): Promise<Slide[]> => {
-  const prompt = `Create a 7-slide presentation about "${topic}". The first slide should be a title slide, and the last should be a "Thank You" or "Q&A" slide. For each slide, provide a title, 3-5 bullet points for the main content, and detailed speaker notes. The content should be informative and well-structured.`;
+export const generatePresentationContent = async (topic: string, voiceoverLanguage: string): Promise<Slide[]> => {
+  const prompt = `Create a 7-slide presentation about "${topic}". All slide content (titles, bullet points) must be in English. The first slide should be a title slide, and the last should be a "Thank You" or "Q&A" slide. For each slide, provide: a title, 3-5 bullet points, detailed speaker notes in English, the speaker notes translated into ${voiceoverLanguage}, and a detailed image prompt. The image prompt should describe a scene that visually represents the concept on the slide, like a metaphor or a diagram, to be used as a background image.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -50,8 +58,7 @@ export const generatePresentationContent = async (topic: string): Promise<Slide[
     const jsonText = response.text.trim();
     const presentationData = JSON.parse(jsonText);
     
-    // Basic validation
-    if (!Array.isArray(presentationData) || presentationData.some(s => !s.title || !s.content || !s.speakerNotes)) {
+    if (!Array.isArray(presentationData) || presentationData.some(s => !s.title || !s.content || !s.speakerNotes || !s.translatedSpeakerNotes || !s.imagePrompt)) {
         throw new Error("AI returned data in an unexpected format.");
     }
 
@@ -62,16 +69,39 @@ export const generatePresentationContent = async (topic: string): Promise<Slide[
   }
 };
 
-export const generateVoiceover = async (text: string): Promise<string> => {
+export const generateImage = async (prompt: string): Promise<string> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [{ text: prompt }],
+      },
+      config: {
+        responseModalities: [Modality.IMAGE],
+      },
+    });
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        return part.inlineData.data;
+      }
+    }
+    throw new Error("No image data received from API.");
+  } catch (error) {
+    console.error("Error generating image:", error);
+    throw new Error("Failed to generate image.");
+  }
+};
+
+export const generateVoiceover = async (text: string, voice: string): Promise<string> => {
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: text }] }],
+      contents: [{ parts: [{ text: `Say with a professional and clear tone: ${text}` }] }],
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Kore' },
+            prebuiltVoiceConfig: { voiceName: voice },
           },
         },
       },

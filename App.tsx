@@ -2,15 +2,32 @@
 
 import React, { useState, useCallback, useRef } from 'react';
 import PptxGenJS from 'pptxgenjs';
-import { generatePresentationContent, generateVoiceover } from './services/geminiService';
+import { generatePresentationContent, generateVoiceover, generateImage } from './services/geminiService';
 import type { Slide } from './types';
 import { SlidePreview } from './components/SlidePreview';
 import { Loader } from './components/Loader';
-import { DownloadIcon, PresentationIcon, PlayIcon, PauseIcon } from './components/Icons';
+import { DownloadIcon, PresentationIcon, PlayIcon, PauseIcon, AudioIcon } from './components/Icons';
 import { audioBufferToWavBlob, decode, decodeAudioData } from './utils/audioUtils';
+
+const voiceoverLanguages = [
+  { code: 'English', name: 'English' },
+  { code: 'Hindi', name: 'Hindi' },
+  { code: 'Tamil', name: 'Tamil' },
+  { code: 'Telugu', name: 'Telugu' },
+];
+
+const voices = [
+  { id: 'Kore', name: 'Kore (Female)' },
+  { id: 'Puck', name: 'Puck (Male)' },
+  { id: 'Charon', name: 'Charon (Male)' },
+  { id: 'Fenrir', name: 'Fenrir (Male)' },
+  { id: 'Zephyr', name: 'Zephyr (Female)' },
+];
 
 const App: React.FC = () => {
   const [topic, setTopic] = useState<string>('');
+  const [voiceoverLanguage, setVoiceoverLanguage] = useState<string>(voiceoverLanguages[0].code);
+  const [voice, setVoice] = useState<string>(voices[0].id);
   const [slides, setSlides] = useState<Slide[]>([]);
   const [currentSlide, setCurrentSlide] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -34,22 +51,32 @@ const App: React.FC = () => {
 
     try {
       setLoadingMessage('Generating presentation content...');
-      const generatedSlides = await generatePresentationContent(topic);
+      const generatedSlides = await generatePresentationContent(topic, voiceoverLanguage);
       setSlides(generatedSlides);
+
+      const slidesWithImages: Slide[] = [...generatedSlides];
+      for (let i = 0; i < generatedSlides.length; i++) {
+        setLoadingMessage(`Generating image for slide ${i + 1}/${generatedSlides.length}...`);
+        const imageBase64 = await generateImage(generatedSlides[i].imagePrompt);
+        slidesWithImages[i] = { ...generatedSlides[i], image: imageBase64 };
+        setSlides([...slidesWithImages]);
+      }
 
       setLoadingMessage('Crafting voiceover for each slide...');
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       const audioBuffers: AudioBuffer[] = [];
       let totalLength = 0;
 
-      for (let i = 0; i < generatedSlides.length; i++) {
-        setLoadingMessage(`Generating voice for slide ${i + 1}/${generatedSlides.length}...`);
-        const slide = generatedSlides[i];
-        const audioBase64 = await generateVoiceover(slide.speakerNotes);
-        const audioBytes = decode(audioBase64);
-        const audioBuffer = await decodeAudioData(audioBytes, audioContext, 24000, 1);
-        audioBuffers.push(audioBuffer);
-        totalLength += audioBuffer.length;
+      for (let i = 0; i < slidesWithImages.length; i++) {
+        setLoadingMessage(`Generating voice for slide ${i + 1}/${slidesWithImages.length}...`);
+        const slide = slidesWithImages[i];
+        if (slide.translatedSpeakerNotes) {
+          const audioBase64 = await generateVoiceover(slide.translatedSpeakerNotes, voice);
+          const audioBytes = decode(audioBase64);
+          const audioBuffer = await decodeAudioData(audioBytes, audioContext, 24000, 1);
+          audioBuffers.push(audioBuffer);
+          totalLength += audioBuffer.length;
+        }
       }
       
       setLoadingMessage('Stitching audio clips together...');
@@ -80,33 +107,46 @@ const App: React.FC = () => {
     const pptx = new PptxGenJS();
     pptx.layout = 'LAYOUT_16x9';
 
-    slides.forEach((slide, index) => {
+    slides.forEach((slide) => {
       const pptSlide = pptx.addSlide();
       
-      pptSlide.background = { color: '1A202C' };
-      pptSlide.color = 'FFFFFF';
+      if (slide.image) {
+        pptSlide.background = { data: `data:image/png;base64,${slide.image}` };
+        // Add a semi-transparent overlay for text readability
+        pptSlide.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: '100%', fill: { color: '000000', transparency: 60 } });
+        
+        pptSlide.addText(slide.title, { 
+          x: 0.5, y: 0.25, w: '90%', h: 1, 
+          fontSize: 44, bold: true, color: 'FFFFFF', align: 'center',
+          objectName: 'title',
+          animation: { type: 'fadeIn', duration: 1, delay: 0.5 }
+        });
 
-      // FIX: The `animation` property should be added to the text object options, not on a separate shape.
-      // This also resolves the error that `pptx.shapes` does not exist.
-      pptSlide.addText(slide.title, { 
-        x: 0.5, y: 0.25, w: '90%', h: 1, 
-        fontSize: 36, bold: true, color: '38BDF8',
-        align: 'center',
-        objectName: 'title',
-        animation: { type: 'fadeIn', duration: 1, delay: 0.5 }
-      });
+        const contentPoints = slide.content.map(point => ({ text: point, options: { bullet: true, color: 'E2E8F0' } }));
+        pptSlide.addText(contentPoints, {
+          x: 1, y: 1.5, w: '80%', h: 3.5,
+          fontSize: 24, color: 'FFFFFF', lineSpacing: 36,
+          objectName: 'content',
+          animation: { type: 'slideUp', duration: 1, delay: 0.7, effect: 'in', from: 'b' }
+        });
 
-      const contentPoints = slide.content.map(point => ({ text: point, options: { bullet: true, color: 'E2E8F0' } }));
-      // FIX: The `animation` property should be added to the text object options, not on a separate shape.
-      // This also resolves the error that `pptx.shapes` does not exist.
-      pptSlide.addText(contentPoints, {
-        x: 1, y: 1.5, w: '80%', h: 3.5,
-        fontSize: 20,
-        lineSpacing: 30,
-        objectName: 'content',
-        animation: { type: 'slideUp', duration: 1, delay: 0.7, effect: 'in', from: 'b' }
-      });
+      } else {
+        pptSlide.background = { color: '1A202C' };
+        pptSlide.addText(slide.title, { 
+          x: 0.5, y: 0.25, w: '90%', h: 1, 
+          fontSize: 36, bold: true, color: '38BDF8', align: 'center',
+          objectName: 'title',
+          animation: { type: 'fadeIn', duration: 1, delay: 0.5 }
+        });
 
+        const contentPoints = slide.content.map(point => ({ text: point, options: { bullet: true, color: 'E2E8F0' } }));
+        pptSlide.addText(contentPoints, {
+          x: 1, y: 1.5, w: '80%', h: 3.5,
+          fontSize: 20, lineSpacing: 30,
+          objectName: 'content',
+          animation: { type: 'slideUp', duration: 1, delay: 0.7, effect: 'in', from: 'b' }
+        });
+      }
       pptSlide.addNotes(slide.speakerNotes);
     });
 
@@ -137,24 +177,52 @@ const App: React.FC = () => {
       
       <main className="w-full max-w-5xl flex-1 flex flex-col">
         <div className="bg-slate-800/50 rounded-lg p-6 shadow-2xl border border-slate-700 backdrop-blur-sm">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <input
-              type="text"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g., The Future of Renewable Energy"
-              className="flex-grow bg-slate-700 text-white placeholder-slate-400 rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
-              disabled={isLoading}
-            />
-            <button
-              onClick={handleGenerate}
-              disabled={isLoading || !topic.trim()}
-              className="flex justify-center items-center gap-2 bg-sky-500 hover:bg-sky-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition-all duration-300 transform hover:scale-105 disabled:scale-100"
-            >
-              {isLoading ? 'Generating...' : 'Create Presentation'}
-            </button>
-          </div>
-          {error && <p className="text-red-400 mt-4 text-center">{error}</p>}
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col sm:flex-row gap-4">
+                  <input
+                      type="text"
+                      value={topic}
+                      onChange={(e) => setTopic(e.target.value)}
+                      placeholder="e.g., The Future of Renewable Energy"
+                      className="flex-grow bg-slate-700 text-white placeholder-slate-400 rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
+                      disabled={isLoading}
+                  />
+                  <button
+                      onClick={handleGenerate}
+                      disabled={isLoading || !topic.trim()}
+                      className="flex justify-center items-center gap-2 bg-sky-500 hover:bg-sky-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition-all duration-300 transform hover:scale-105 disabled:scale-100"
+                  >
+                      {isLoading ? 'Generating...' : 'Create Presentation'}
+                  </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                      <label htmlFor="voiceover-language-select" className="block text-sm font-medium text-slate-300 mb-1">Voiceover Language</label>
+                      <select
+                          id="voiceover-language-select"
+                          value={voiceoverLanguage}
+                          onChange={(e) => setVoiceoverLanguage(e.target.value)}
+                          disabled={isLoading}
+                          className="w-full bg-slate-700 text-white rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
+                      >
+                          {voiceoverLanguages.map(lang => <option key={lang.code} value={lang.code}>{lang.name}</option>)}
+                      </select>
+                  </div>
+                  <div>
+                      <label htmlFor="voice-select" className="block text-sm font-medium text-slate-300 mb-1">Voice Style</label>
+                      <select
+                          id="voice-select"
+                          value={voice}
+                          onChange={(e) => setVoice(e.target.value)}
+                          disabled={isLoading}
+                          className="w-full bg-slate-700 text-white rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
+                      >
+                          {voices.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                      </select>
+                  </div>
+              </div>
+            </div>
+            {error && <p className="text-red-400 mt-4 text-center">{error}</p>}
         </div>
 
         {isLoading && <Loader message={loadingMessage} />}
@@ -163,13 +231,21 @@ const App: React.FC = () => {
           <div className="mt-8 flex-1 flex flex-col animate-fade-in-up" style={{ animationFillMode: 'forwards' }}>
              <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                 <h2 className="text-2xl font-semibold text-white">Generated Presentation</h2>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center flex-wrap justify-center gap-3">
                     {audioUrl && (
                         <>
                             <button onClick={toggleAudio} className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-md transition-colors">
                                 {isPlaying ? <PauseIcon className="w-5 h-5"/> : <PlayIcon className="w-5 h-5"/>}
-                                {isPlaying ? 'Pause Voiceover' : 'Play Voiceover'}
+                                {isPlaying ? 'Pause' : 'Play'} Voiceover
                             </button>
+                            <a 
+                                href={audioUrl} 
+                                download={`${topic.replace(/\s+/g, '_')}_voiceover.wav`}
+                                className="flex items-center gap-2 bg-teal-500 hover:bg-teal-600 text-white font-semibold py-2 px-4 rounded-md transition-colors"
+                            >
+                                <AudioIcon className="w-5 h-5"/>
+                                Download Audio
+                            </a>
                             <audio ref={audioRef} src={audioUrl} onEnded={() => setIsPlaying(false)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} />
                         </>
                     )}
