@@ -438,7 +438,7 @@ const App: React.FC = () => {
       <header className="w-full max-w-5xl text-center mb-8">
         <div className="flex justify-center items-center gap-4 mb-2">
             <PresentationIcon className="w-10 h-10 text-sky-400" />
-            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-white">AI Animated Presentation Generator</h1>
+            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-white">Pujiverse Presentation Generator</h1>
         </div>
         <p className="text-slate-400 text-lg">Turn any topic into a downloadable presentation with voiceover and video in seconds.</p>
       </header>
