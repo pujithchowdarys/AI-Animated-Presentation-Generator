@@ -1,5 +1,7 @@
 {
   "name": "Pujiverse Presentation Generator",
   "description": "Generate animated PowerPoint presentations with voiceovers and video on any topic using AI. Enter a topic, and the app will create slide content, generate a corresponding voiceover, and allow you to download both the PPTX file, audio, and a combined video.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }

@@ -1,7 +1,6 @@
-
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import PptxGenJS from 'pptxgenjs';
-import { generatePresentationContent, generateVoiceover, generateImage } from './services/geminiService';
+import { generatePresentationContent, generateVoiceover, generateImage, getGenerativeModel } from './services/geminiService';
 import type { Slide } from './types';
 import { SlidePreview } from './components/SlidePreview';
 import { Loader } from './components/Loader';
@@ -91,16 +90,37 @@ const App: React.FC = () => {
   const [voice, setVoice] = useState<string>(voices[0].id);
   const [slides, setSlides] = useState<Slide[]>([]);
   const [currentSlide, setCurrentSlide] = useState<number>(0);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [loadingMessage, setLoadingMessage] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(true); // Start as true for API key check
+  const [loadingMessage, setLoadingMessage] = useState<string>('Initializing application...');
   const [error, setError] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isGeneratingVideo, setIsGeneratingVideo] = useState<boolean>(false);
   const [videoDownloadUrl, setVideoDownloadUrl] = useState<string | null>(null);
+  const [isServiceInitialized, setIsServiceInitialized] = useState<boolean>(false); // New state for API key check
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioBuffersRef = useRef<AudioBuffer[]>([]); // To store individual audio buffers for video generation
+
+  // Effect to check API key on component mount
+  useEffect(() => {
+    const initializeService = async () => {
+      try {
+        setLoadingMessage('Initializing application...');
+        await getGenerativeModel(); // Attempt to get the GenAI model instance
+        setIsServiceInitialized(true);
+        setError(null);
+      } catch (e: any) {
+        setIsServiceInitialized(false);
+        setError(e.message);
+        console.error("API Key Initialization Error:", e);
+      } finally {
+        setIsLoading(false);
+        setLoadingMessage('');
+      }
+    };
+    initializeService();
+  }, []);
 
   const drawSlideToCanvas = useCallback(async (ctx: GenericCanvasRenderingContext2D, slide: Slide) => {
     ctx.clearRect(0, 0, LOGICAL_CANVAS_WIDTH, LOGICAL_CANVAS_HEIGHT);
@@ -431,7 +451,8 @@ const App: React.FC = () => {
   };
   
   const hasResults = slides.length > 0;
-  const isBusy = isLoading || isGeneratingVideo;
+  // Use isServiceInitialized to gate the main app content
+  const isBusy = isLoading || isGeneratingVideo || !isServiceInitialized;
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center p-4 sm:p-6 md:p-8">
@@ -444,139 +465,155 @@ const App: React.FC = () => {
       </header>
       
       <main className="w-full max-w-5xl flex-1 flex flex-col">
-        <div className="bg-slate-800/50 rounded-lg p-6 shadow-2xl border border-slate-700 backdrop-blur-sm">
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-col sm:flex-row gap-4">
-                  <input
-                      type="text"
-                      value={topic}
-                      onChange={(e) => setTopic(e.target.value)}
-                      placeholder="e.g., The Future of Renewable Energy (main topic)"
-                      className="flex-grow bg-slate-700 text-white placeholder-slate-400 rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
-                      disabled={isBusy}
-                  />
-                  <button
-                      onClick={handleGenerate}
-                      disabled={isBusy || !topic.trim()}
-                      className="flex justify-center items-center gap-2 bg-sky-500 hover:bg-sky-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition-all duration-300 transform hover:scale-105 disabled:scale-100"
-                  >
-                      {isLoading ? 'Generating...' : 'Create Presentation'}
-                  </button>
-              </div>
+        {isLoading && !error && <Loader message={loadingMessage} />}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4"> {/* Added mt-4 for spacing */}
-                  <div>
-                      <label htmlFor="voiceover-language-select" className="block text-sm font-medium text-slate-300 mb-1">Voiceover Language</label>
-                      <select
-                          id="voiceover-language-select"
-                          value={voiceoverLanguage}
-                          onChange={(e) => setVoiceoverLanguage(e.target.value)}
-                          disabled={isBusy}
-                          className="w-full bg-slate-700 text-white rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
-                      >
-                          {voiceoverLanguages.map(lang => <option key={lang.code} value={lang.code}>{lang.name}</option>)}
-                      </select>
-                  </div>
-                  <div>
-                      <label htmlFor="voice-select" className="block text-sm font-medium text-slate-300 mb-1">Voice Style</label>
-                      <select
-                          id="voice-select"
-                          value={voice}
-                          onChange={(e) => setVoice(e.target.value)}
-                          disabled={isBusy}
-                          className="w-full bg-slate-700 text-white rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
-                      >
-                          {voices.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-                      </select>
-                  </div>
-              </div>
-            </div>
-            {error && <p className="text-red-400 mt-4 text-center">{error}</p>}
-        </div>
-
-        {isBusy && <Loader message={loadingMessage} />}
-        
-        {hasResults && !isBusy && (
-          <div className="mt-8 flex-1 flex flex-col animate-fade-in-up" style={{ animationFillMode: 'forwards' }}>
-            <div className="bg-slate-800/50 rounded-lg p-6 shadow-2xl border border-slate-700 backdrop-blur-sm mb-6">
-                <h2 className="text-3xl font-bold text-sky-400 mb-2 text-center">{generatedPresentationTitle}</h2>
-                <p className="text-slate-300 text-center">{generatedPresentationDescription}</p>
-            </div>
-
-             <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
-                <h2 className="text-2xl font-semibold text-white">Generated Presentation</h2>
-                <div className="flex items-center flex-wrap justify-center gap-3">
-                    {audioUrl && (
-                        <>
-                            <button onClick={toggleAudio} className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-md transition-colors">
-                                {isPlaying ? <PauseIcon className="w-5 h-5"/> : <PlayIcon className="w-5 h-5"/>}
-                                {isPlaying ? 'Pause' : 'Play'} Voiceover
-                            </button>
-                            <a 
-                                href={audioUrl} 
-                                download={`${topic.replace(/\s+/g, '_')}_voiceover.wav`}
-                                className="flex items-center gap-2 bg-teal-500 hover:bg-teal-600 text-white font-semibold py-2 px-4 rounded-md transition-colors"
-                            >
-                                <AudioIcon className="w-5 h-5"/>
-                                Download Audio
-                            </a>
-                            <audio ref={audioRef} src={audioUrl} onEnded={() => setIsPlaying(false)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} />
-                        </>
-                    )}
-                    <button onClick={handleDownloadPpt} className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2 px-4 rounded-md transition-colors">
-                        <DownloadIcon className="w-5 h-5"/>
-                        Download PPTX
-                    </button>
-                    <button 
-                        onClick={handleDownloadVideo} 
-                        disabled={isGeneratingVideo}
-                        className="flex items-center gap-2 bg-purple-500 hover:bg-purple-600 text-white font-semibold py-2 px-4 rounded-md transition-colors disabled:bg-slate-600 disabled:cursor-not-allowed"
-                    >
-                        {isGeneratingVideo ? 'Generating Video...' : (
-                            <>
-                                <VideoIcon className="w-5 h-5"/>
-                                Download Video
-                            </>
-                        )}
-                    </button>
-                    {videoDownloadUrl && (
-                        <a 
-                            href={videoDownloadUrl} 
-                            download={`${topic.replace(/\s+/g, '_')}_presentation.webm`}
-                            className="flex items-center gap-2 bg-pink-500 hover:bg-pink-600 text-white font-semibold py-2 px-4 rounded-md transition-colors"
-                        >
-                            <DownloadIcon className="w-5 h-5"/>
-                            Video Ready (Download)
-                        </a>
-                    )}
-                </div>
-            </div>
-
-            <div className="flex-1 flex flex-col bg-slate-800/50 p-4 rounded-lg shadow-inner border border-slate-700">
-                <div className="aspect-video w-full bg-slate-900 rounded-md overflow-hidden flex justify-center items-center">
-                    <SlidePreview slide={slides[currentSlide]} index={currentSlide}/>
-                </div>
-                 <div className="flex justify-between items-center mt-4 text-slate-300">
-                    <button 
-                        onClick={() => setCurrentSlide(s => Math.max(0, s - 1))}
-                        disabled={currentSlide === 0}
-                        className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
-                        Previous
-                    </button>
-                    <span>Slide {currentSlide + 1} of {slides.length}</span>
-                    <button 
-                        onClick={() => setCurrentSlide(s => Math.min(slides.length - 1, s + 1))}
-                        disabled={currentSlide === slides.length - 1}
-                        className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                    >
-                        Next
-                    </button>
-                </div>
-            </div>
+        {error && (
+          <div className="bg-red-900/50 rounded-lg p-6 shadow-2xl border border-red-700 backdrop-blur-sm text-center my-8 animate-fade-in-up">
+            <p className="text-red-300 text-lg mb-4">
+              A critical error occurred: <strong className="text-red-100">{error}</strong>
+            </p>
+            {error.includes("API_KEY environment variable is not set") && (
+              <p className="text-red-200 text-md">
+                Please ensure your `API_KEY` environment variable is correctly configured.
+                If deploying on Vercel, navigate to your project settings, then "Environment Variables", and add `API_KEY` with your Google Gemini API key.
+              </p>
+            )}
           </div>
         )}
 
+        {isServiceInitialized && !error && (
+          <>
+            <div className="bg-slate-800/50 rounded-lg p-6 shadow-2xl border border-slate-700 backdrop-blur-sm">
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col sm:flex-row gap-4">
+                      <input
+                          type="text"
+                          value={topic}
+                          onChange={(e) => setTopic(e.target.value)}
+                          placeholder="e.g., The Future of Renewable Energy (main topic)"
+                          className="flex-grow bg-slate-700 text-white placeholder-slate-400 rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
+                          disabled={isLoading}
+                      />
+                      <button
+                          onClick={handleGenerate}
+                          disabled={isLoading || !topic.trim()}
+                          className="flex justify-center items-center gap-2 bg-sky-500 hover:bg-sky-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition-all duration-300 transform hover:scale-105 disabled:scale-100"
+                      >
+                          {isLoading ? 'Generating...' : 'Create Presentation'}
+                      </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4"> {/* Added mt-4 for spacing */}
+                      <div>
+                          <label htmlFor="voiceover-language-select" className="block text-sm font-medium text-slate-300 mb-1">Voiceover Language</label>
+                          <select
+                              id="voiceover-language-select"
+                              value={voiceoverLanguage}
+                              onChange={(e) => setVoiceoverLanguage(e.target.value)}
+                              disabled={isLoading}
+                              className="w-full bg-slate-700 text-white rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
+                          >
+                              {voiceoverLanguages.map(lang => <option key={lang.code} value={lang.code}>{lang.name}</option>)}
+                          </select>
+                      </div>
+                      <div>
+                          <label htmlFor="voice-select" className="block text-sm font-medium text-slate-300 mb-1">Voice Style</label>
+                          <select
+                              id="voice-select"
+                              value={voice}
+                              onChange={(e) => setVoice(e.target.value)}
+                              disabled={isLoading}
+                              className="w-full bg-slate-700 text-white rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
+                          >
+                              {voices.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                          </select>
+                      </div>
+                  </div>
+                </div>
+            </div>
+
+            {hasResults && !isLoading && (
+              <div className="mt-8 flex-1 flex flex-col animate-fade-in-up" style={{ animationFillMode: 'forwards' }}>
+                <div className="bg-slate-800/50 rounded-lg p-6 shadow-2xl border border-slate-700 backdrop-blur-sm mb-6">
+                    <h2 className="text-3xl font-bold text-sky-400 mb-2 text-center">{generatedPresentationTitle}</h2>
+                    <p className="text-slate-300 text-center">{generatedPresentationDescription}</p>
+                </div>
+
+                <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+                    <h2 className="text-2xl font-semibold text-white">Generated Presentation</h2>
+                    <div className="flex items-center flex-wrap justify-center gap-3">
+                        {audioUrl && (
+                            <>
+                                <button onClick={toggleAudio} className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-md transition-colors">
+                                    {isPlaying ? <PauseIcon className="w-5 h-5"/> : <PlayIcon className="w-5 h-5"/>}
+                                    {isPlaying ? 'Pause' : 'Play'} Voiceover
+                                </button>
+                                <a 
+                                    href={audioUrl} 
+                                    download={`${topic.replace(/\s+/g, '_')}_voiceover.wav`}
+                                    className="flex items-center gap-2 bg-teal-500 hover:bg-teal-600 text-white font-semibold py-2 px-4 rounded-md transition-colors"
+                                >
+                                    <AudioIcon className="w-5 h-5"/>
+                                    Download Audio
+                                </a>
+                                <audio ref={audioRef} src={audioUrl} onEnded={() => setIsPlaying(false)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} />
+                            </>
+                        )}
+                        <button onClick={handleDownloadPpt} className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-2 px-4 rounded-md transition-colors">
+                            <DownloadIcon className="w-5 h-5"/>
+                            Download PPTX
+                        </button>
+                        <button 
+                            onClick={handleDownloadVideo} 
+                            disabled={isGeneratingVideo}
+                            className="flex items-center gap-2 bg-purple-500 hover:bg-purple-600 text-white font-semibold py-2 px-4 rounded-md transition-colors disabled:bg-slate-600 disabled:cursor-not-allowed"
+                        >
+                            {isGeneratingVideo ? 'Generating Video...' : (
+                                <>
+                                    <VideoIcon className="w-5 h-5"/>
+                                    Download Video
+                                </>
+                            )}
+                        </button>
+                        {videoDownloadUrl && (
+                            <a 
+                                href={videoDownloadUrl} 
+                                download={`${topic.replace(/\s+/g, '_')}_presentation.webm`}
+                                className="flex items-center gap-2 bg-pink-500 hover:bg-pink-600 text-white font-semibold py-2 px-4 rounded-md transition-colors"
+                            >
+                                <DownloadIcon className="w-5 h-5"/>
+                                Video Ready (Download)
+                            </a>
+                        )}
+                    </div>
+                </div>
+
+                <div className="flex-1 flex flex-col bg-slate-800/50 p-4 rounded-lg shadow-inner border border-slate-700">
+                    <div className="aspect-video w-full bg-slate-900 rounded-md overflow-hidden flex justify-center items-center">
+                        <SlidePreview slide={slides[currentSlide]} index={currentSlide}/>
+                    </div>
+                    <div className="flex justify-between items-center mt-4 text-slate-300">
+                        <button 
+                            onClick={() => setCurrentSlide(s => Math.max(0, s - 1))}
+                            disabled={currentSlide === 0}
+                            className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        >
+                            Previous
+                        </button>
+                        <span>Slide {currentSlide + 1} of {slides.length}</span>
+                        <button 
+                            onClick={() => setCurrentSlide(s => Math.min(slides.length - 1, s + 1))}
+                            disabled={currentSlide === slides.length - 1}
+                            className="px-4 py-2 rounded-md bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        >
+                            Next
+                        </button>
+                    </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </main>
     </div>
   );

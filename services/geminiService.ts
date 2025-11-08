@@ -1,12 +1,25 @@
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import type { Slide } from "../types";
 
-const API_KEY = process.env.API_KEY;
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable is not set");
-}
+let aiInstance: GoogleGenAI | null = null;
 
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+export const getGenerativeModel = (): GoogleGenAI => {
+  if (aiInstance) {
+    return aiInstance;
+  }
+
+  const API_KEY = process.env.API_KEY;
+  if (!API_KEY || API_KEY === 'undefined') { // Added 'undefined' string check for build-time stringification
+    throw new Error(
+      "API_KEY environment variable is not set or is invalid. " +
+      "Please configure it in your deployment environment (e.g., Vercel environment variables) " +
+      "or ensure `process.env.API_KEY` is correctly defined in your development setup."
+    );
+  }
+
+  aiInstance = new GoogleGenAI({ apiKey: API_KEY });
+  return aiInstance;
+};
 
 const presentationOutputSchema = {
   type: Type.OBJECT,
@@ -56,6 +69,7 @@ const presentationOutputSchema = {
 };
 
 export const generatePresentationContent = async (topic: string, voiceoverLanguage: string): Promise<{ overallPresentationTitle: string; overallPresentationDescription: string; slides: Slide[] }> => {
+  const ai = getGenerativeModel();
   let prompt = `Generate a 7-slide presentation about "${topic}".
 First, provide a concise and engaging overall presentation title (max 100 characters) and a brief, compelling overall presentation description (max 900 characters) that summarizes the presentation's scope and key takeaways.
 Then, for each of the 7 slides, provide: a title, 3-5 bullet points, detailed speaker notes in English, the speaker notes translated into ${voiceoverLanguage}, and a detailed image prompt.
@@ -87,6 +101,7 @@ The image prompt should describe a scene that visually represents the concept on
 };
 
 export const generateImage = async (prompt: string): Promise<string> => {
+  const ai = getGenerativeModel();
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
@@ -110,6 +125,7 @@ export const generateImage = async (prompt: string): Promise<string> => {
 };
 
 export const generateVoiceover = async (text: string, voice: string): Promise<string> => {
+  const ai = getGenerativeModel();
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
