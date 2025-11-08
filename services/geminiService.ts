@@ -121,7 +121,8 @@ export const generateVoiceover = async (text: string, voice: string): Promise<st
             prebuiltVoiceConfig: { voiceName: voice },
           },
         },
-      });
+      }, // Added the missing closing curly brace for the config object
+    });
     
     const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (!audioData) {
