@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import PptxGenJS from 'pptxgenjs';
-import { generatePresentationContent, generateVoiceover, generateImage, getGenerativeModel } from './services/geminiService';
+import { generatePresentationContent, generateVoiceover, generateImage, getGenerativeModel, saveApiKey, validateApiKey, getApiKey } from './services/geminiService';
 import type { Slide } from './types';
 import { SlidePreview } from './components/SlidePreview';
 import { Loader } from './components/Loader';
@@ -81,46 +81,123 @@ const drawBulletPoints = (ctx: GenericCanvasRenderingContext2D, points: string[]
   });
 };
 
+interface ApiKeySetupProps {
+  onKeySubmit: (key: string) => void;
+  isLoading: boolean;
+  error: string | null;
+}
+
+const ApiKeySetup: React.FC<ApiKeySetupProps> = ({ onKeySubmit, isLoading, error }) => {
+  const [apiKey, setApiKey] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (apiKey.trim()) {
+      onKeySubmit(apiKey.trim());
+    }
+  };
+
+  return (
+    <div className="w-full max-w-2xl mx-auto bg-slate-800/50 rounded-lg p-8 shadow-2xl border border-slate-700 backdrop-blur-sm animate-fade-in-up">
+      <h2 className="text-2xl font-bold text-sky-400 mb-4 text-center">Enter Your Google Gemini API Key</h2>
+      <p className="text-slate-300 mb-4">
+        To use this application, please provide your Google Gemini API key. This helps you manage your own usage and associated billing.
+      </p>
+      <p className="text-slate-300 mb-6">
+        Don't have an API key? You can create one for free at{' '}
+        <a 
+          href="https://aistudio.google.com/app/apikey" 
+          target="_blank" 
+          rel="noopener noreferrer" 
+          className="text-sky-400 hover:text-sky-300 underline"
+        >
+          Google AI Studio
+        </a>. 
+        Just click "Create API key in new project" to get started.
+      </p>
+      <form onSubmit={handleSubmit}>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder="Paste your API key here (e.g., AIzaSy...)"
+          className="w-full bg-slate-700 text-white placeholder-slate-400 rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition mb-4"
+        />
+        <button
+          type="submit"
+          disabled={isLoading || !apiKey.trim()}
+          className="w-full flex justify-center items-center gap-2 bg-sky-500 hover:bg-sky-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition-all duration-300 transform hover:scale-105 disabled:scale-100"
+        >
+          {isLoading ? 'Verifying...' : 'Save Key and Start Creating'}
+        </button>
+        {error && <p className="text-red-400 mt-4 text-center">{error}</p>}
+      </form>
+    </div>
+  );
+};
+
 
 const App: React.FC = () => {
   const [topic, setTopic] = useState<string>('');
-  const [generatedPresentationTitle, setGeneratedPresentationTitle] = useState<string>(''); // New state for AI-generated presentation title
-  const [generatedPresentationDescription, setGeneratedPresentationDescription] = useState<string>(''); // New state for AI-generated presentation description
+  const [generatedPresentationTitle, setGeneratedPresentationTitle] = useState<string>('');
+  const [generatedPresentationDescription, setGeneratedPresentationDescription] = useState<string>('');
   const [voiceoverLanguage, setVoiceoverLanguage] = useState<string>(voiceoverLanguages[0].code);
   const [voice, setVoice] = useState<string>(voices[0].id);
   const [slides, setSlides] = useState<Slide[]>([]);
   const [currentSlide, setCurrentSlide] = useState<number>(0);
-  const [isLoading, setIsLoading] = useState<boolean>(true); // Start as true for API key check
-  const [loadingMessage, setLoadingMessage] = useState<string>('Initializing application...');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isGeneratingVideo, setIsGeneratingVideo] = useState<boolean>(false);
   const [videoDownloadUrl, setVideoDownloadUrl] = useState<string | null>(null);
-  const [isServiceInitialized, setIsServiceInitialized] = useState<boolean>(false); // New state for API key check
+  const [isApiKeyValid, setIsApiKeyValid] = useState<boolean>(false);
+  const [isVerifyingKey, setIsVerifyingKey] = useState<boolean>(true);
 
   const audioRef = useRef<HTMLAudioElement>(null);
-  const audioBuffersRef = useRef<AudioBuffer[]>([]); // To store individual audio buffers for video generation
+  const audioBuffersRef = useRef<AudioBuffer[]>([]);
 
-  // Effect to check API key on component mount
   useEffect(() => {
     const initializeService = async () => {
-      try {
-        setLoadingMessage('Initializing application...');
-        await getGenerativeModel(); // Attempt to get the GenAI model instance
-        setIsServiceInitialized(true);
-        setError(null);
-      } catch (e: any) {
-        setIsServiceInitialized(false);
-        setError(e.message);
-        console.error("API Key Initialization Error:", e);
-      } finally {
-        setIsLoading(false);
+      const storedApiKey = getApiKey();
+      if (storedApiKey) {
+        setIsVerifyingKey(true);
+        setLoadingMessage('Verifying API Key...');
+        setApiKeyError(null);
+        const isValid = await validateApiKey(storedApiKey);
+        if (isValid) {
+          setIsApiKeyValid(true);
+        } else {
+          setIsApiKeyValid(false);
+          setApiKeyError("Your stored API Key is invalid. Please enter a valid key.");
+        }
+        setIsVerifyingKey(false);
         setLoadingMessage('');
+      } else {
+        setIsVerifyingKey(false);
+        setIsApiKeyValid(false);
       }
     };
     initializeService();
   }, []);
+
+  const handleApiKeySubmit = async (newApiKey: string) => {
+    setIsVerifyingKey(true);
+    setLoadingMessage('Verifying API Key...');
+    setApiKeyError(null);
+    const isValid = await validateApiKey(newApiKey);
+    if (isValid) {
+      saveApiKey(newApiKey);
+      setIsApiKeyValid(true);
+    } else {
+      setIsApiKeyValid(false);
+      setApiKeyError("The provided API Key is invalid or there was a network issue. Please try again.");
+    }
+    setIsVerifyingKey(false);
+    setLoadingMessage('');
+  };
 
   const drawSlideToCanvas = useCallback(async (ctx: GenericCanvasRenderingContext2D, slide: Slide) => {
     ctx.clearRect(0, 0, LOGICAL_CANVAS_WIDTH, LOGICAL_CANVAS_HEIGHT);
@@ -137,7 +214,6 @@ const App: React.FC = () => {
       ctx.fillRect(0, 0, LOGICAL_CANVAS_WIDTH, LOGICAL_CANVAS_HEIGHT);
     } else {
       ctx.fillStyle = '#1A202C'; // bg-slate-900 equivalent
-      // Fix: Corrected typo 'LOGICAL_CANAS_HEIGHT' to 'LOGICAL_CANVAS_HEIGHT'
       ctx.fillRect(0, 0, LOGICAL_CANVAS_WIDTH, LOGICAL_CANVAS_HEIGHT);
     }
 
@@ -172,7 +248,6 @@ const App: React.FC = () => {
 
     try {
       setLoadingMessage('Generating presentation content and details...');
-      // Pass new title and description to the service
       const { overallPresentationTitle, overallPresentationDescription, slides: generatedSlides } = await generatePresentationContent(topic, voiceoverLanguage);
       
       setGeneratedPresentationTitle(overallPresentationTitle);
@@ -207,7 +282,7 @@ const App: React.FC = () => {
       const mergedBuffer = audioContext.createBuffer(1, totalLength, 24000);
       const channelData = mergedBuffer.getChannelData(0);
       let offset = 0;
-      for (const buffer of audioBuffersRef.current) { // Use stored buffers for merged audio
+      for (const buffer of audioBuffersRef.current) {
         channelData.set(buffer.getChannelData(0), offset);
         offset += buffer.length;
       }
@@ -231,46 +306,39 @@ const App: React.FC = () => {
     const pptx = new PptxGenJS();
     pptx.layout = 'LAYOUT_16x9';
 
-    // Add presentation title and description to the PPTX if they exist
     if (generatedPresentationTitle || generatedPresentationDescription) {
         const titleSlide = pptx.addSlide();
-        titleSlide.background = { color: '1A202C' }; // Dark background
+        titleSlide.background = { color: '1A202C' };
         if (generatedPresentationTitle) {
             titleSlide.addText(generatedPresentationTitle, {
                 x: 0.5, y: 1.5, w: '90%', h: 1,
                 fontSize: 48, bold: true, color: '38BDF8', align: 'center',
-                objectName: 'generated_presentation_title',
             });
         }
         if (generatedPresentationDescription) {
             titleSlide.addText(generatedPresentationDescription, {
                 x: 0.5, y: 3, w: '90%', h: 1.5,
                 fontSize: 24, color: 'E2E8F0', align: 'center',
-                objectName: 'generated_presentation_description',
             });
         }
     }
-
 
     slides.forEach((slide) => {
       const pptSlide = pptx.addSlide();
       
       if (slide.image) {
         pptSlide.background = { data: `data:image/png;base64,${slide.image}` };
-        // Add a semi-transparent overlay for text readability
         pptSlide.addShape(PptxGenJS.ShapeType.rect, { x: 0, y: 0, w: '100%', h: '100%', fill: { color: '000000', transparency: 60 } });
         
         pptSlide.addText(slide.title, { 
           x: 0.5, y: 0.25, w: '90%', h: 1, 
           fontSize: 44, bold: true, color: 'FFFFFF', align: 'center',
-          objectName: 'title',
         });
 
         const contentPoints = slide.content.map(point => ({ text: point, options: { bullet: true, color: 'E2E8F0' } }));
         pptSlide.addText(contentPoints, {
           x: 1, y: 1.5, w: '80%', h: 3.5,
           fontSize: 24, color: 'FFFFFF', lineSpacing: 36,
-          objectName: 'content',
         });
 
       } else {
@@ -278,14 +346,12 @@ const App: React.FC = () => {
         pptSlide.addText(slide.title, { 
           x: 0.5, y: 0.25, w: '90%', h: 1, 
           fontSize: 36, bold: true, color: '38BDF8', align: 'center',
-          objectName: 'title',
         });
 
         const contentPoints = slide.content.map(point => ({ text: point, options: { bullet: true, color: 'E2E8F0' } }));
         pptSlide.addText(contentPoints, {
           x: 1, y: 1.5, w: '80%', h: 3.5,
           fontSize: 20, lineSpacing: 30,
-          objectName: 'content',
         });
       }
       pptSlide.addNotes(slide.speakerNotes);
@@ -305,7 +371,6 @@ const App: React.FC = () => {
     setError(null);
     setVideoDownloadUrl(null);
 
-    // Declared here to be accessible in cleanupCanvas
     let visibleCanvas: HTMLCanvasElement | null = null; 
 
     const cleanupCanvas = () => {
@@ -315,32 +380,28 @@ const App: React.FC = () => {
     };
 
     try {
-      // Ensure fonts are loaded before drawing on canvas
       await document.fonts.ready;
       setLoadingMessage('Fonts loaded. Starting 1080p video rendering...');
 
-      // Always create a visible HTMLCanvasElement for `captureStream`
       visibleCanvas = document.createElement('canvas');
-      visibleCanvas.width = VIDEO_OUTPUT_WIDTH; // Use higher resolution
-      visibleCanvas.height = VIDEO_OUTPUT_HEIGHT; // Use higher resolution
-      visibleCanvas.style.display = 'none'; // Keep it hidden
+      visibleCanvas.width = VIDEO_OUTPUT_WIDTH;
+      visibleCanvas.height = VIDEO_OUTPUT_HEIGHT;
+      visibleCanvas.style.display = 'none';
       document.body.appendChild(visibleCanvas);
       const visibleCtx = visibleCanvas.getContext('2d', { willReadFrequently: true });
       if (!visibleCtx) {
         throw new Error("Failed to get 2D context for visible canvas.");
       }
-      visibleCtx.scale(SCALE_FACTOR_X, SCALE_FACTOR_Y); // Apply scaling to visible context
+      visibleCtx.scale(SCALE_FACTOR_X, SCALE_FACTOR_Y);
 
-      // Determine the actual drawing canvas and its context
       let drawingCanvas: HTMLCanvasElement | OffscreenCanvas;
       let drawingCtx: GenericCanvasRenderingContext2D;
 
       if (typeof OffscreenCanvas !== 'undefined') {
-        drawingCanvas = new OffscreenCanvas(VIDEO_OUTPUT_WIDTH, VIDEO_OUTPUT_HEIGHT); // Use higher resolution
+        drawingCanvas = new OffscreenCanvas(VIDEO_OUTPUT_WIDTH, VIDEO_OUTPUT_HEIGHT);
         drawingCtx = drawingCanvas.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
         setLoadingMessage('Using OffscreenCanvas for rendering...');
       } else {
-        // If OffscreenCanvas is not available, draw directly to the visible canvas
         drawingCanvas = visibleCanvas;
         drawingCtx = visibleCtx as CanvasRenderingContext2D;
         setLoadingMessage('Using standard Canvas for rendering...');
@@ -350,32 +411,27 @@ const App: React.FC = () => {
         throw new Error("Failed to get 2D context for drawing.");
       }
       
-      // Apply scaling to the drawing context if it's separate from the visible one
       if (drawingCanvas !== visibleCanvas) {
         drawingCtx.scale(SCALE_FACTOR_X, SCALE_FACTOR_Y);
       }
 
-
-      // Robust check for captureStream availability on the *visible* canvas
       if (typeof visibleCanvas.captureStream !== 'function') {
         throw new Error("Your browser/environment does not support canvas.captureStream(), which is required for video generation.");
       }
 
-      const canvasVideoStream = visibleCanvas.captureStream(30); // 30 FPS for video
+      const canvasVideoStream = visibleCanvas.captureStream(30);
       
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       const audioDestination = audioContext.createMediaStreamDestination();
       
-      // Create a new MediaStream to combine video from canvas and audio from AudioContext
       const combinedStream = new MediaStream();
       canvasVideoStream.getVideoTracks().forEach(track => combinedStream.addTrack(track));
       audioDestination.stream.getAudioTracks().forEach(track => combinedStream.addTrack(track));
 
-
       const mediaRecorder = new MediaRecorder(combinedStream, { 
-        mimeType: 'video/webm; codecs="vp8, opus"', // Specify codecs for quality and compatibility
-        videoBitsPerSecond: 8_000_000, // 8 Mbps for 1080p
-        audioBitsPerSecond: 128_000, // 128 Kbps
+        mimeType: 'video/webm; codecs="vp8, opus"',
+        videoBitsPerSecond: 8_000_000,
+        audioBitsPerSecond: 128_000,
       });
       const recordedChunks: Blob[] = [];
 
@@ -398,15 +454,11 @@ const App: React.FC = () => {
 
       for (let i = 0; i < slides.length; i++) {
         setLoadingMessage(`Rendering slide ${i + 1}/${slides.length} and playing voiceover for 1080p video...`);
-        // Draw to the offscreen/drawing canvas
         await drawSlideToCanvas(drawingCtx, slides[i]);
 
         if (drawingCanvas instanceof OffscreenCanvas) {
-          // Transfer the rendered image from offscreen to the visible canvas for capture
-          // Draw the full-resolution bitmap onto the scaled visible canvas, filling it.
           visibleCtx.drawImage(drawingCanvas.transferToImageBitmap(), 0, 0, LOGICAL_CANVAS_WIDTH, LOGICAL_CANVAS_HEIGHT);
         }
-        // If drawingCanvas is visibleCanvas, the drawing is already directly on it.
 
         const audioBuffer = audioBuffersRef.current[i];
         if (audioBuffer) {
@@ -415,7 +467,6 @@ const App: React.FC = () => {
           source.connect(audioDestination);
           source.start();
 
-          // Wait for audio to finish playing
           await new Promise<void>((resolve) => {
             source.onended = () => {
               source.disconnect();
@@ -433,12 +484,11 @@ const App: React.FC = () => {
     } catch (e: any) {
       setError(`Error generating video: ${e.message}`);
       console.error('Video generation error:', e);
-      cleanupCanvas(); // Ensure cleanup on error
+      cleanupCanvas();
     } finally {
       setIsGeneratingVideo(false);
     }
   }, [slides, audioBuffersRef, topic, drawSlideToCanvas]);
-
 
   const toggleAudio = () => {
     if (!audioRef.current) return;
@@ -451,8 +501,7 @@ const App: React.FC = () => {
   };
   
   const hasResults = slides.length > 0;
-  // Use isServiceInitialized to gate the main app content
-  const isBusy = isLoading || isGeneratingVideo || !isServiceInitialized;
+  const isBusy = isLoading || isGeneratingVideo;
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center p-4 sm:p-6 md:p-8">
@@ -464,24 +513,18 @@ const App: React.FC = () => {
         <p className="text-slate-400 text-lg">Turn any topic into a downloadable presentation with voiceover and video in seconds.</p>
       </header>
       
-      <main className="w-full max-w-5xl flex-1 flex flex-col">
-        {isLoading && !error && <Loader message={loadingMessage} />}
-
-        {error && (
-          <div className="bg-red-900/50 rounded-lg p-6 shadow-2xl border border-red-700 backdrop-blur-sm text-center my-8 animate-fade-in-up">
-            <p className="text-red-300 text-lg mb-4">
-              A critical error occurred: <strong className="text-red-100">{error}</strong>
-            </p>
-            {error.includes("API_KEY environment variable is not set") && (
-              <p className="text-red-200 text-md">
-                Please ensure your `API_KEY` environment variable is correctly configured.
-                If deploying on Vercel, navigate to your project settings, then "Environment Variables", and add `API_KEY` with your Google Gemini API key.
-              </p>
-            )}
-          </div>
-        )}
-
-        {isServiceInitialized && !error && (
+      <main className="w-full max-w-5xl flex-1 flex flex-col justify-center">
+        {!isApiKeyValid ? (
+          isVerifyingKey ? (
+            <Loader message={loadingMessage || 'Initializing...'} />
+          ) : (
+            <ApiKeySetup 
+              onKeySubmit={handleApiKeySubmit} 
+              isLoading={isVerifyingKey}
+              error={apiKeyError}
+            />
+          )
+        ) : (
           <>
             <div className="bg-slate-800/50 rounded-lg p-6 shadow-2xl border border-slate-700 backdrop-blur-sm">
                 <div className="flex flex-col gap-4">
@@ -492,25 +535,25 @@ const App: React.FC = () => {
                           onChange={(e) => setTopic(e.target.value)}
                           placeholder="e.g., The Future of Renewable Energy (main topic)"
                           className="flex-grow bg-slate-700 text-white placeholder-slate-400 rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
-                          disabled={isLoading}
+                          disabled={isBusy}
                       />
                       <button
                           onClick={handleGenerate}
-                          disabled={isLoading || !topic.trim()}
+                          disabled={isBusy || !topic.trim()}
                           className="flex justify-center items-center gap-2 bg-sky-500 hover:bg-sky-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md transition-all duration-300 transform hover:scale-105 disabled:scale-100"
                       >
-                          {isLoading ? 'Generating...' : 'Create Presentation'}
+                          {isBusy ? 'Generating...' : 'Create Presentation'}
                       </button>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4"> {/* Added mt-4 for spacing */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                       <div>
                           <label htmlFor="voiceover-language-select" className="block text-sm font-medium text-slate-300 mb-1">Voiceover Language</label>
                           <select
                               id="voiceover-language-select"
                               value={voiceoverLanguage}
                               onChange={(e) => setVoiceoverLanguage(e.target.value)}
-                              disabled={isLoading}
+                              disabled={isBusy}
                               className="w-full bg-slate-700 text-white rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
                           >
                               {voiceoverLanguages.map(lang => <option key={lang.code} value={lang.code}>{lang.name}</option>)}
@@ -522,7 +565,7 @@ const App: React.FC = () => {
                               id="voice-select"
                               value={voice}
                               onChange={(e) => setVoice(e.target.value)}
-                              disabled={isLoading}
+                              disabled={isBusy}
                               className="w-full bg-slate-700 text-white rounded-md px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-sky-500 focus:outline-none transition"
                           >
                               {voices.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
@@ -532,7 +575,17 @@ const App: React.FC = () => {
                 </div>
             </div>
 
-            {hasResults && !isLoading && (
+            {isBusy && <Loader message={loadingMessage} />}
+            
+            {error && (
+              <div className="bg-red-900/50 rounded-lg p-6 shadow-2xl border border-red-700 backdrop-blur-sm text-center my-8 animate-fade-in-up">
+                <p className="text-red-300 text-lg">
+                  An error occurred: <strong className="text-red-100">{error}</strong>
+                </p>
+              </div>
+            )}
+            
+            {hasResults && !isBusy && (
               <div className="mt-8 flex-1 flex flex-col animate-fade-in-up" style={{ animationFillMode: 'forwards' }}>
                 <div className="bg-slate-800/50 rounded-lg p-6 shadow-2xl border border-slate-700 backdrop-blur-sm mb-6">
                     <h2 className="text-3xl font-bold text-sky-400 mb-2 text-center">{generatedPresentationTitle}</h2>

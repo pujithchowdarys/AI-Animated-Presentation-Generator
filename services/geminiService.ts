@@ -2,22 +2,63 @@ import { GoogleGenAI, Modality, Type } from "@google/genai";
 import type { Slide } from "../types";
 
 let aiInstance: GoogleGenAI | null = null;
+let currentApiKey: string | null = null;
+
+export const getApiKey = (): string | null => {
+  try {
+    return localStorage.getItem('gemini-api-key');
+  } catch (e) {
+    console.error("Could not access localStorage", e);
+    return null;
+  }
+};
+
+export const saveApiKey = (apiKey: string) => {
+  try {
+    localStorage.setItem('gemini-api-key', apiKey);
+  } catch (e) {
+    console.error("Could not access localStorage", e);
+  }
+  // Reset instance when key changes
+  aiInstance = null;
+  currentApiKey = null;
+};
+
+export const validateApiKey = async (apiKey: string): Promise<boolean> => {
+  if (!apiKey) return false;
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    // Make a lightweight, low-cost call to check if the key is valid.
+    await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: "Hi",
+        config: {
+            maxOutputTokens: 1,
+        }
+    });
+    return true;
+  } catch (error) {
+    console.error("API Key validation failed:", error);
+    return false;
+  }
+};
+
 
 export const getGenerativeModel = (): GoogleGenAI => {
-  if (aiInstance) {
+  const key = getApiKey();
+
+  if (!key) {
+    throw new Error("API key has not been set. Please set it in the application.");
+  }
+
+  // If we have a cached instance with the same key, return it
+  if (aiInstance && currentApiKey === key) {
     return aiInstance;
   }
-
-  const API_KEY = process.env.API_KEY;
-  if (!API_KEY || API_KEY === 'undefined') { // Added 'undefined' string check for build-time stringification
-    throw new Error(
-      "API_KEY environment variable is not set or is invalid. " +
-      "Please configure it in your deployment environment (e.g., Vercel environment variables) " +
-      "or ensure `process.env.API_KEY` is correctly defined in your development setup."
-    );
-  }
-
-  aiInstance = new GoogleGenAI({ apiKey: API_KEY });
+  
+  // Otherwise, create a new instance
+  aiInstance = new GoogleGenAI({ apiKey: key });
+  currentApiKey = key;
   return aiInstance;
 };
 
